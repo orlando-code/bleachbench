@@ -7,10 +7,7 @@ scipy>=1.7.0
 scikit-learn>=1.0.0
 xgboost>=1.5.0
 lightgbm>=3.3.0
-
-# Deep learning
-tensorflow>=2.8.0
-keras>=2.8.0
+torch>=2.4.0
 
 # Time series analysis
 statsmodels>=0.13.0
