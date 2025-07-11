@@ -6,7 +6,7 @@ setup(
     description="A machine learning project to compare traditional and ML methods for predicting coral bleaching from time series data.",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
-    author="Orlando Timmerman, Robert Rouse, Akash Verma", "Matt Archer",
+    author="Orlando Timmerman, Robert Rouse, Akash Verma, Matt Archer",
     url="https://github.com/orlando-code/bleachbench",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
