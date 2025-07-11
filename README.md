@@ -85,7 +85,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 👥 Team
 
-- Orlando Timmerman (rt582@cam.ac.uk)
+- Orlando Timmerman (✉️ rt582@cam.ac.uk)
 - Akash Vermo
 - Robert Rouse
 - Matt Archer
