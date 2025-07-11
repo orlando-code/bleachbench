@@ -26,3 +26,6 @@ Defines globals used throughout the codebase.
 repo_dir = get_repo_root()
 module_dir = repo_dir / "bleachbase"
 data_dir = repo_dir / "data"
+
+boundary_dir = data_dir / "boundaries"
+sst_dir = data_dir / "sst"
