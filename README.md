@@ -27,15 +27,15 @@ coral_bleaching_prediction/
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.11+
 - pip or conda
 
 ### Installation
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
-cd coral_bleaching_prediction
+git clone https://github.com/orlando-code/bleachbench
+cd bleachbench
 ```
 
 2. Create a virtual environment using venv (just to keep things consistent between users: other package managers could be added later):
@@ -88,7 +88,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Orlando Timmerman (rt582@cam.ac.uk)
 - Akash Vermo
 - Robert Rouse
-- [Team Member 4]
+- Matt Archer
 
 ## 📚 References
 
