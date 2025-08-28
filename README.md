@@ -46,7 +46,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 3. Install dependencies:
 ```bash
-pip install -r requirements.txt
+pip install .
 ```
 
 ## 📊 Data
@@ -85,7 +85,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 👥 Team
 
-- Orlando Timmerman (rt582@cam.ac.uk)
+- Orlando Timmerman (✉️ rt582@cam.ac.uk)
 - Akash Vermo
 - Robert Rouse
 - Matt Archer
