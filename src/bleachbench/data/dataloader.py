@@ -7,7 +7,7 @@ import xarray as xa
 from dateutil.relativedelta import relativedelta
 
 # custom
-# from src.config import config
+from src.bleachbench.utils.config import config
 
 
 def download_erdapp_thredds_nc_files(
@@ -87,7 +87,7 @@ def download_erdapp_thredds_nc_files(
                 )
             else:
                 print(
-                    f"Failed to download data for {start_date.strftime('%Y-%m-%d')} to {end_of_month.strftime('%Y-%m-%d')}.\nError: \n{request.text}"
+                    f"Failed to download data for {start_date.strftime('%Y-%m-%d')} to {end_of_month.strftime('%Y-%m-%d')}.\nError: \n{response.text}"
                 )
         else:
             print(
@@ -97,4 +97,3 @@ def download_erdapp_thredds_nc_files(
         start_date = next_month
 
     print("\nDownload complete.")
-
