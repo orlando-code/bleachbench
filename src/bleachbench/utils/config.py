@@ -29,3 +29,6 @@ data_dir = repo_dir / "data"
 
 boundary_dir = data_dir / "boundaries"
 sst_dir = data_dir / "sst"
+crw_sst_dir = sst_dir / "CRW_SST"
+bleaching_dir = data_dir / "bleaching"
+unep_gdcr_dir = data_dir / "UNEP_WCMC"
