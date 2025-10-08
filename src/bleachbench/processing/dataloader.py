@@ -105,16 +105,6 @@ class GetERDAPP:
         """Always use patchwork downloading for consistency."""
         return True
 
-    # def make_output_dir(self, output_dir: Path) -> Path:
-    #     """Name the output directory based on the spatial extent"""
-    #     # Create a directory name based on the full spatial extent
-    #     output_dir_fp = (
-    #         output_dir
-    #         / f"{min(self.lats):.0f}_{max(self.lats):.0f}_{min(self.lons):.0f}_{max(self.lons):.0f}"
-    #     )
-    #     # output_dir_fp.mkdir(parents=True, exist_ok=True)
-    #     return output_dir_fp
-
     def make_patch_output_dir(
         self,
         output_dir: Path,
@@ -351,6 +341,7 @@ class GetERDAPP:
             ui_instance.add_failed(file_id, f"Error: {e}", e)
             ui_instance.complete_file(file_id)
 
+
     def _download_url_direct_ui(self, url, ui_instance, patch_bounds=None):
         """Directly download a file from a URL using the UI."""
         file_path = self.get_output_fp(url, patch_bounds)
@@ -363,12 +354,16 @@ class GetERDAPP:
                 time.sleep(2)
                 if file_path.exists() and file_path.stat().st_size > 0:
                     return True
+            
             response = requests.get(url, stream=True, timeout=(30, 300))
             response.raise_for_status()
             file_path.parent.mkdir(parents=True, exist_ok=True)
             if temp_path.exists():
                 temp_path.unlink()
+            
+            # Get file size from the GET response headers
             total = int(response.headers.get("content-length", 0))
+            
             bytes_downloaded = 0
             # set the per-file progress bar total to the file size (if available)
             ui_instance.update_file_progress(file_id, 0, total)
@@ -456,7 +451,9 @@ class GetERDAPP:
         
         # Process files in batches to avoid memory and resource exhaustion
         total_batches = (len(urls_to_download) + batch_size - 1) // batch_size
-        console.print(f"Processing in {total_batches} batches of up to {batch_size} files each...")
+        batch_str = "batches" if total_batches > 1 else "batch"
+        batch_size_str = "files" if adaptive_batch_size > 1 else "file"
+        console.print(f"Processing in {total_batches} {batch_str} of up to {adaptive_batch_size} {batch_size_str} each...")
 
         all_failed_files = []
         total_completed = 0

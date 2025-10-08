@@ -133,7 +133,13 @@ class DownloadProgressUI:
         # Advance overall progress and mark file bar as complete
         task_id = self.file_task_ids[file_id]
         if task_id is not None:
-            self.progress.update(task_id, completed=self.progress.tasks[task_id].total)
+            # Preserve the current total if it's greater than 0, otherwise use current completed
+            current_task = self.progress.tasks[task_id]
+            if current_task.total > 0:
+                self.progress.update(task_id, completed=current_task.total)
+            else:
+                # If total is unknown (0), just mark as complete without changing the display
+                self.progress.update(task_id, completed=current_task.completed)
         if self.overall_task is not None:
             self.progress.advance(self.overall_task)
 
