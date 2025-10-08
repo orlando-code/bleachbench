@@ -81,13 +81,21 @@ class DownloadProgressUI:
         self.overall_task = self.progress.add_task(
             "[cyan]Overall\n", total=len(self.files)
         )
-        # Add a progress bar for each file (now a string), with initial status 'PENDING'
-        for file_id in self.files:
-            desc = f"[white][PENDING] {self._display_name(file_id)}"
-            total = 1  # Unknown size by default
-            task_id = self.progress.add_task(desc, total=total, visible=True)
-            self.file_task_ids[file_id] = task_id
-            self.file_status[file_id] = "PENDING"
+        # For large numbers of files, only show progress bars for active downloads
+        # to avoid memory issues and UI clutter
+        if len(self.files) > 100:
+            # Only create progress bars as files become active
+            for file_id in self.files:
+                self.file_task_ids[file_id] = None  # Will be created when needed
+                self.file_status[file_id] = "PENDING"
+        else:
+            # For smaller numbers, show all progress bars immediately
+            for file_id in self.files:
+                desc = f"[white][PENDING] {self._display_name(file_id)}"
+                total = 1  # Unknown size by default
+                task_id = self.progress.add_task(desc, total=total, visible=True)
+                self.file_task_ids[file_id] = task_id
+                self.file_status[file_id] = "PENDING"
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -98,7 +106,15 @@ class DownloadProgressUI:
         color = color or "white"
         desc = f"[{color}][{status}] {self._display_name(file_id)}"
         task_id = self.file_task_ids[file_id]
-        self.progress.update(task_id, description=desc)
+        
+        # Create progress bar on-demand for large file sets
+        if task_id is None and status in ["STARTING", "DOWNLOADING"]:
+            task_id = self.progress.add_task(desc, total=1, visible=True)
+            self.file_task_ids[file_id] = task_id
+        
+        if task_id is not None:
+            self.progress.update(task_id, description=desc)
+        
         self.file_status[file_id] = status
         if status == "DONE":
             self.status_counts["done"] += 1
@@ -116,16 +132,18 @@ class DownloadProgressUI:
     def complete_file(self, file_id):
         # Advance overall progress and mark file bar as complete
         task_id = self.file_task_ids[file_id]
-        self.progress.update(task_id, completed=self.progress.tasks[task_id].total)
+        if task_id is not None:
+            self.progress.update(task_id, completed=self.progress.tasks[task_id].total)
         if self.overall_task is not None:
             self.progress.advance(self.overall_task)
 
     def update_file_progress(self, file_id, completed, total=None):
         task_id = self.file_task_ids[file_id]
-        if total is not None:
-            self.progress.update(task_id, completed=completed, total=total)
-        else:
-            self.progress.update(task_id, completed=completed)
+        if task_id is not None:
+            if total is not None:
+                self.progress.update(task_id, completed=completed, total=total)
+            else:
+                self.progress.update(task_id, completed=completed)
 
     def hide_file(self, file_id):
         task_id = self.file_task_ids.get(file_id)
@@ -171,15 +189,17 @@ class DownloadProgressUI:
         # If file_id is a URL, show the last part or a date string; if a path, show the filename
         import re
         from pathlib import Path
-
+        file_id = Path(file_id)
         if isinstance(file_id, str):
             # Try to extract a date or filename from the URL
             match = re.search(r"(\d{4}-\d{2})", file_id)
             if match:
                 return f"{match.group(1)}.nc"
+        if isinstance(file_id, Path):
             # If it's a path, show the filename
-            if file_id.startswith("/") or file_id.startswith("."):
-                return Path(file_id).name
-            # Otherwise, just show the last part after a slash
-            return file_id.split("/")[-1][:40]
-        return str(file_id)
+            # if file_id.startswith("/") or file_id.startswith("."):
+                # return Path(file_id).name
+            return file_id
+        # Otherwise, just show the last part after a slash
+        return file_id.split("/")[-1][:40]
+        # return str(file_id)

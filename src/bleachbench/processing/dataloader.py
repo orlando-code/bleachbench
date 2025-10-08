@@ -33,7 +33,7 @@ class GetERDAPP:
         self.date_range = date_range
         self.lats = lats
         self.lons = lons
-        self.output_dir = self.make_output_dir(output_dir)
+        self.output_dir = output_dir
 
         self.max_workers = max_workers
         self.retry_failed = retry_failed
@@ -42,6 +42,59 @@ class GetERDAPP:
         # TODO:
         # estimate file size/download time
         # summary of download after finished (number saved, failed, time taken)
+
+    def check_system_resources(self):
+        """Check system resources and warn if they might be insufficient."""
+        import psutil
+        import os
+        
+        # Check memory usage
+        memory = psutil.virtual_memory()
+        if memory.percent > 80:
+            rich_print(f"[yellow]Warning: High memory usage ({memory.percent:.1f}%). Consider reducing batch size.[/yellow]")
+        
+        # Check available disk space
+        disk = psutil.disk_usage(str(self.output_dir))
+        free_gb = disk.free / (1024**3)
+        if free_gb < 10:  # Less than 10GB free
+            rich_print(f"[yellow]Warning: Low disk space ({free_gb:.1f}GB free). Ensure sufficient space for downloads.[/yellow]")
+        
+        # Check file descriptor limit (Unix systems)
+        if hasattr(os, 'getrlimit'):
+            try:
+                soft, hard = os.getrlimit(os.RLIMIT_NOFILE)
+                if soft < 1000:
+                    rich_print(f"[yellow]Warning: Low file descriptor limit ({soft}). May cause issues with many concurrent downloads.[/yellow]")
+            except (OSError, AttributeError):
+                pass
+
+    def _get_adaptive_batch_size(self, requested_batch_size: int, total_files: int) -> int:
+        """Adjust batch size based on system resources and total file count."""
+        import psutil
+        
+        # Start with requested batch size
+        batch_size = requested_batch_size
+        
+        # Reduce batch size for very large file counts
+        if total_files > 1000:
+            batch_size = min(batch_size, 25)
+        elif total_files > 500:
+            batch_size = min(batch_size, 40)
+        
+        # Check memory usage and reduce batch size if high
+        try:
+            memory = psutil.virtual_memory()
+            if memory.percent > 70:
+                batch_size = min(batch_size, 20)
+            elif memory.percent > 50:
+                batch_size = min(batch_size, 35)
+        except Exception:
+            pass  # If we can't check memory, use the current batch size
+        
+        # Ensure minimum batch size
+        batch_size = max(batch_size, 5)
+        
+        return batch_size
 
     def calc_area(self) -> float:
         lat_side = abs(max(self.lats) - min(self.lats))
@@ -52,15 +105,15 @@ class GetERDAPP:
         """Always use patchwork downloading for consistency."""
         return True
 
-    def make_output_dir(self, output_dir: Path) -> Path:
-        """Name the output directory based on the spatial extent"""
-        # Create a directory name based on the full spatial extent
-        output_dir_fp = (
-            output_dir
-            / f"{min(self.lats):.0f}_{max(self.lats):.0f}_{min(self.lons):.0f}_{max(self.lons):.0f}"
-        )
-        output_dir_fp.mkdir(parents=True, exist_ok=True)
-        return output_dir_fp
+    # def make_output_dir(self, output_dir: Path) -> Path:
+    #     """Name the output directory based on the spatial extent"""
+    #     # Create a directory name based on the full spatial extent
+    #     output_dir_fp = (
+    #         output_dir
+    #         / f"{min(self.lats):.0f}_{max(self.lats):.0f}_{min(self.lons):.0f}_{max(self.lons):.0f}"
+    #     )
+    #     # output_dir_fp.mkdir(parents=True, exist_ok=True)
+    #     return output_dir_fp
 
     def make_patch_output_dir(
         self,
@@ -280,7 +333,9 @@ class GetERDAPP:
                 url = url_data
                 patch_bounds = None
 
-            file_id = url  # use url as unique identifier
+            # Generate consistent file_id based on output path
+            file_path = self.get_output_fp(url, patch_bounds)
+            file_id = f"{file_path.parent.name}/{file_path.name}"
             ui_instance.set_status(file_id, "STARTING", "cyan")
             success = self._download_url_direct_ui(url, ui_instance, patch_bounds)
             if success:
@@ -300,7 +355,8 @@ class GetERDAPP:
         """Directly download a file from a URL using the UI."""
         file_path = self.get_output_fp(url, patch_bounds)
         temp_path = file_path.with_suffix(file_path.suffix + ".part")
-        file_id = url
+        file_id = f"{file_path.parent.name}/{file_path.name}"
+
         try:
             ui_instance.set_status(file_id, "DOWNLOADING", "blue")
             if temp_path.exists():
@@ -328,7 +384,9 @@ class GetERDAPP:
                 temp_path.rename(file_path)
                 return True
         except Exception as e:
-            print(f"Direct download failed for {file_path.name}: {e}")
+            import traceback
+            print(f"Direct download failed for {file_id}: {e}\n{traceback.format_exc()}")
+            # print(f"Direct download failed for {file_path.name}: {e}")
             for path in [temp_path, file_path]:
                 if path.exists():
                     try:
@@ -358,12 +416,15 @@ class GetERDAPP:
         t = threading.Thread(target=hide_file, daemon=True)
         t.start()
 
-    def run(self):
-        """Run the downloader using patchwork approach."""
+    def run(self, batch_size: int = 50):
+        """Run the downloader using patchwork approach with batch processing."""
         from rich.console import Console
 
         console = Console()
         self.remove_part_files(self.output_dir)
+
+        # Check system resources before starting
+        self.check_system_resources()
 
         console.print(
             f"[blue]Using patchwork download scheme for {self.calc_area():.1f} sq degree area.[/blue]"
@@ -387,24 +448,78 @@ class GetERDAPP:
         dl_str = "patch file" if len(urls_to_download) == 1 else "patch files"
         console.print(f"Downloading {len(urls_to_download)} new {dl_str}...")
 
-        # Extract just URLs for the UI (it expects a list of strings)
-        urls_for_ui = [url for url, _ in urls_to_download]
+        # Adjust batch size based on system resources and number of files
+        adaptive_batch_size = self._get_adaptive_batch_size(batch_size, len(urls_to_download))
+        if adaptive_batch_size != batch_size:
+            console.print(f"[yellow]Adjusted batch size from {batch_size} to {adaptive_batch_size} based on system resources[/yellow]")
+            batch_size = adaptive_batch_size
+        
+        # Process files in batches to avoid memory and resource exhaustion
+        total_batches = (len(urls_to_download) + batch_size - 1) // batch_size
+        console.print(f"Processing in {total_batches} batches of up to {batch_size} files each...")
 
-        with ui.DownloadProgressUI(urls_for_ui) as ui_instance:
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=self.max_workers
-            ) as executor:
-                _ = [
-                    executor.submit(self._process_url_with_ui, url_data, ui_instance)
-                    for url_data in urls_to_download
-                ]
-            ui_instance.print_summary()
+        all_failed_files = []
+        total_completed = 0
+        total_failed = 0
+
+        for batch_num in range(total_batches):
+            start_idx = batch_num * batch_size
+            end_idx = min(start_idx + batch_size, len(urls_to_download))
+            batch_urls = urls_to_download[start_idx:end_idx]
+            
+            console.print(f"\n[cyan]Processing batch {batch_num + 1}/{total_batches} ({len(batch_urls)} files)...[/cyan]")
+            
+            # Generate file_ids for the UI based on output paths
+            file_ids_for_ui = []
+            for url, patch_bounds in batch_urls:
+                file_path = self.get_output_fp(url, patch_bounds)
+                file_id = f"{file_path.parent.name}/{file_path.name}"
+                file_ids_for_ui.append(file_id)
+
+            with ui.DownloadProgressUI(file_ids_for_ui) as ui_instance:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=self.max_workers
+                ) as executor:
+                    # Submit all files in current batch
+                    futures = [
+                        executor.submit(self._process_url_with_ui, url_data, ui_instance)
+                        for url_data in batch_urls
+                    ]
+                    
+                    # Wait for all downloads in this batch to complete
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            future.result()  # This will raise any exception that occurred
+                        except Exception as e:
+                            console.print(f"[red]Batch processing error: {e}[/red]")
+                
+                # Collect results from this batch
+                batch_completed = ui_instance.status_counts.get("done", 0)
+                batch_failed = ui_instance.status_counts.get("failed", 0)
+                total_completed += batch_completed
+                total_failed += batch_failed
+                
+                # Collect failed files for potential retry
+                all_failed_files.extend(ui_instance.failed_files)
+                
+                console.print(f"Batch {batch_num + 1} completed: {batch_completed} successful, {batch_failed} failed")
+                
+                # Small delay between batches to allow system resources to recover
+                if batch_num < total_batches - 1:  # Don't delay after the last batch
+                    time.sleep(2)
+
+        # Print final summary
+        console.print(f"\n[bold]Final Summary:[/bold]")
+        console.print(f"Total completed: {total_completed}")
+        console.print(f"Total failed: {total_failed}")
+        
+        if all_failed_files:
+            console.print(f"Failed files: {len(all_failed_files)}")
+            if self.retry_failed and total_failed > 0:
+                console.print(f"[yellow]Retry logic not yet implemented for batch processing[/yellow]")
 
         end_time = time.localtime()
         console.print(f"\n:clock3: END: {time.strftime('%Y-%m-%d %H:%M:%S', end_time)}")
-
-        # TODO: Implement retry logic for patchwork downloads
-        # Note: This would need to be updated to handle the different data structures
 
 
 def main():
@@ -477,6 +592,13 @@ def main():
         default=False,
         help="Show patch information without downloading (useful for large areas).",
     )
+    parser.add_argument(
+        "--batch-size",
+        dest="batch_size",
+        type=int,
+        default=50,
+        help="Number of files to process in each batch (default: 50). Use smaller values for large datasets to avoid memory issues.",
+    )
 
     args = parser.parse_args()
 
@@ -494,7 +616,7 @@ def main():
     if args.show_patches:
         erdapp.print_patch_info()
     else:
-        erdapp.run()
+        erdapp.run(batch_size=args.batch_size)
 
 
 if __name__ == "__main__":
