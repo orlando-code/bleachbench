@@ -11,7 +11,11 @@ from typing import Any, Callable, List
 
 import numpy as np
 import pandas as pd
+import xarray as xa
+import geopandas as gpd
+from dask.diagnostics import ProgressBar
 
+from bleachbench.utils import config
 
 class DataProcessor:
     """
@@ -230,3 +234,266 @@ def process_bleaching_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         ) / 2
 
     return df_processed
+
+
+def sample_from_dataarray(
+    da: xa.DataArray,
+    coords: np.ndarray,
+    chunks: dict = None,
+    interp_method: str = "linear",
+    fill_strategy: str = "mean",
+    persist: bool = True,
+) -> np.ndarray:
+    """
+    Interpolate a DataArray onto a set of (lon, lat) points.
+    Returns a NumPy array of shape (N_points, N_time, ...) depending on input.
+
+    Parameters
+    ----------
+    da (xa.DataArray):  The variable to interpolate, e.g., shape (time, lat, lon).
+    coords (np.ndarray, shape (N_points, 2)):   Points to sample at, given as (lon, lat).
+    chunks (dict, optional):    Optional rechunking of da before interpolation.
+    interp_method (str):    Interpolation method passed to `xarray.DataArray.interp()`.
+    fill_strategy (str or float):   Strategy for filling NaNs: 'mean', 'none', 'zero', or a numeric constant.
+    persist (bool): Whether to persist the interpolated array in memory.
+
+    Returns
+    -------
+    np.ndarray
+        Interpolated values at (points, time, ...) depending on da.
+    """
+    if chunks:  # chunk if necessary
+        da = da.chunk(chunks)
+    
+    # Check for and fix duplicate coordinates in the DataArray
+    for dim in ['latitude', 'longitude']:
+        if dim in da.dims:
+            coord_values = da[dim].values
+            if len(coord_values) != len(np.unique(coord_values)):
+                # Remove duplicates by taking the first occurrence
+                _, unique_idx = np.unique(coord_values, return_index=True)
+                da = da.isel({dim: unique_idx})
+
+    pts = xa.Dataset(
+        {
+            "latitude": (("points",), coords[:, 0]),
+            "longitude": (("points",), coords[:, 1]),
+        }
+    )  # build tiny dataset with point coords
+
+    # vectorized interpolation: result dims = (time, points)
+    print("Sampling data...")
+    sampled = da.interp(
+        latitude=pts.latitude,
+        longitude=pts.longitude,
+        method=interp_method,
+        kwargs={"fill_value": None},
+    )
+
+    if fill_strategy == "mean":
+        sampled = sampled.fillna(da.mean(dim=["latitude", "longitude"]))
+    elif fill_strategy == "zero":
+        sampled = sampled.fillna(0.0)
+    elif isinstance(fill_strategy, (float, int)):
+        sampled = sampled.fillna(fill_strategy)
+    elif fill_strategy == "none":
+        pass  # leave NaNs
+    else:
+        raise ValueError(f"Unknown fill_strategy: {fill_strategy}")
+
+    # 4) (Optional) persist in memory / show progress
+    #    Wrap either persist() or compute() in a single ProgressBar
+    with ProgressBar():
+        sampled = sampled.persist() if persist else sampled.compute()
+
+    # 5) Return a NumPy array in (points, time) order
+    dims = list(sampled.dims)
+    if "points" in dims:
+        sampled = sampled.transpose("points", *[d for d in dims if d != "points"])
+
+    return sampled.values
+
+
+def load_combined_dataframe() -> pd.DataFrame:
+    """Load the combined dataframe from CSV."""
+    return pd.read_csv(config.bleaching_dir / "processed" / "combined_df.csv", low_memory=False)
+
+
+def filter_essential_nans(df: pd.DataFrame) -> pd.DataFrame:
+    """Essential filtering: remove NaNs in critical columns."""
+    print("Filtering essential NaNs...")
+    # filter nans in month and year
+    df = df[df["month"].notna() & df["year"].notna()]
+    # filter nans in latitude and longitude
+    df = df[df["latitude"].notna() & df["longitude"].notna()]
+    return df
+
+
+def filter_bleaching_nans(df: pd.DataFrame) -> pd.DataFrame:
+    """Filter NaNs in bleaching data."""
+    print("Filtering bleaching NaNs...")
+    return df[df["mean_percent_bleached"].notna()]
+
+
+def filter_reef_areas(df: pd.DataFrame) -> pd.DataFrame:
+    """Filter points to only include reef areas using UNEP-GCDR data."""
+    print("Loading UNEP-GCDR dataframe...")
+    unep_gdcr_fp = config.unep_gdcr_dir / "WCMC008_CoralReef2021_Py_v4_1.shp"
+    unep_gdcr_df = gpd.read_file(unep_gdcr_fp)
+
+    gdf_points = gpd.GeoDataFrame(
+        df,
+        geometry=gpd.points_from_xy(df.longitude, df.latitude),
+        crs="EPSG:4326",
+    )
+    unep_gdcr_df = unep_gdcr_df.to_crs(gdf_points.crs)
+    print("Joining dataframes...")
+    reef_points = gpd.sjoin(
+        gdf_points,
+        unep_gdcr_df[["geometry"]],
+        how="inner",
+    )
+    return reef_points
+
+
+def add_bleach_presence_labels(df: pd.DataFrame) -> pd.DataFrame:
+    """Add bleaching presence labels based on thresholds."""
+    print("Adding bleaching presence labels...")
+    # 3.1 Mark absence of ecologically significant bleaching as maximum observation <=10%
+    df["bleach_presence"] = df["max_percent_bleached"].apply(
+        lambda x: 0 if x <= 10 else 1
+    )
+    # 3.2 Mark presence of ecologically significant bleaching for minimum observation >=20%
+    df["bleach_presence"] = df["min_percent_bleached"].apply(
+        lambda x: 1 if x >= 20 else 0
+    )    
+    return df
+
+def remove_uncertain_bleach_presence(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove observations which have max estimation > 10% while minimum < 20%"""
+    print("Removing uncertain bleach presence...")
+    uncertain_indices = (
+        df["max_percent_bleached"] > 10) & (df["min_percent_bleached"] < 20)
+    return df.loc[~uncertain_indices]
+
+def filter_years_2017(df: pd.DataFrame) -> pd.DataFrame:
+    """Filter out years after 2017."""
+    print("Filtering years after 2017...")
+    return df[df["year"] <= 2017]
+
+
+def filter_years_by_observation_count(df: pd.DataFrame, obs_threshold: int = 100) -> pd.DataFrame:
+    """Retain only years with sufficient observations and all preceding years."""
+    print(f"Filtering years with <{obs_threshold} observations...")
+    init_count = len(df)
+    no_obs_per_year = df.groupby("year").size()
+
+    valid_years = []
+    years_sorted = sorted(no_obs_per_year.index)
+
+    valid = True
+    for year in reversed(years_sorted):
+        if no_obs_per_year.loc[year] >= obs_threshold and valid:
+            valid_years.append(year)
+        else:
+            valid = False
+            break
+
+    filtered_df = df[df["year"].isin(valid_years)]
+    print(f"Removed {init_count - len(filtered_df)} observations due to insufficient yearly data")
+    return filtered_df
+
+
+def determine_mmm(df: pd.DataFrame) -> pd.DataFrame:
+    """Determine climatology"""
+    month_of_mmm = xa.open_dataset(config.crw_sst_dir / "processed" / "month_of_mmm.nc")
+    coords = np.vstack((df["longitude"], df["latitude"])).T
+    mmm_i = sample_from_dataarray(month_of_mmm.prediction, coords, interp_method="nearest", fill_strategy="none")
+    df["mmm_i"] = mmm_i
+    return df
+
+def filter_mmm_exposure_period(df: pd.DataFrame) -> pd.DataFrame:
+    """Filter points to only include points within the MMM exposure period."""
+    print("Filtering MMM exposure period...")
+    df = determine_mmm(df)
+    df = filter_missing_sst_data(df)
+    
+    # remove points where mmm_i is less than mmm_min_exposure_period
+    print("Removed", len(df) - len(df[df["month"] >= (df["mmm_i"] - 1)]), "points where mmm_i is less than mmm_min_exposure_period")
+    df = df[df["month"] >= (df["mmm_i"] - 1)]
+    # remove points where mmm_i is greater than mmm_max_exposure_period
+    print("Removed", len(df) - len(df[df["month"] <= (df["mmm_i"] + 3)]), "points where mmm_i is greater than mmm_max_exposure_period")
+    df = df[df["month"] <= (df["mmm_i"] + 3)]
+    return df
+
+
+def filter_missing_sst_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Filter points to only include points with SST data."""
+    print("Filtering missing SST data...")
+    no_nan_df = df[df["mmm_i"].notna()]
+    print(f"Removed {len(df) - len(df[df['mmm_i'].notna()])} points where mmm_i is nan")
+    return no_nan_df
+
+
+def process_bleaching_dataframe(
+    steps: list[str] = ["remove_uncertain_bleach_presence"],
+    obs_threshold: int = 100,
+    do_essential_steps: bool = True,
+    verbose: bool = True,
+    **kwargs
+) -> pd.DataFrame:
+    """
+    Process bleaching dataframe with configurable pipeline steps. Defaults to applying all essential steps.
+    
+    Args:
+        steps (list[str]): List of processing steps to apply. If None, applies all steps.
+        obs_threshold (int): Minimum observations per year for year filtering
+        do_essential_steps (bool): Whether to apply essential steps
+        verbose (bool): Whether to print verbose output
+        **kwargs (dict): Additional arguments passed to individual steps
+        
+
+    Returns:
+        pd.DataFrame: Processed dataframe
+    """
+    available_steps = {
+        'essential_nans': filter_essential_nans,
+        'bleaching_nans': filter_bleaching_nans,
+        'reef_areas': filter_reef_areas,
+        'bleach_labels': add_bleach_presence_labels,
+        'remove_uncertain_bleach_presence': remove_uncertain_bleach_presence,
+        'years_2017': filter_years_2017,
+        'years_obs_count': lambda df: filter_years_by_observation_count(df, obs_threshold),
+        'determine_mmm': determine_mmm,
+        'filter_missing_sst_data': filter_missing_sst_data,
+        'filter_mmm_exposure_period': filter_mmm_exposure_period,
+    }
+    
+    # Load initial data
+    df = load_combined_dataframe()
+    print(f"Starting with {len(df)} observations\n")
+    
+    # Define available steps
+    essential_steps = ["essential_nans", "bleaching_nans", "determine_mmm", "filter_missing_sst_data", "bleach_labels", "years_2017", "years_obs_count"]
+    
+    # do essential steps
+    if do_essential_steps:
+        for step_name in essential_steps:
+            df = available_steps[step_name](df)
+            print(f"After {step_name}: {len(df)} observations\n") if verbose else None
+            # print(f"After {step_name}: {len(df)} observations")
+    
+    # do additional steps
+    if steps is not None:
+        for step_name in steps:
+            if step_name not in available_steps:
+                raise ValueError(f"Unknown step: {step_name}. Available: {list(available_steps.keys())}")
+            if do_essential_steps and step_name in essential_steps:
+                continue
+            
+            df = available_steps[step_name](df)
+            print(f"After {step_name}: {len(df)} observations\n") if verbose else None
+
+    
+    print(f"\nFinal dataset: {len(df)} observations")
+    return df
