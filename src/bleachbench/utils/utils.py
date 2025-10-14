@@ -54,10 +54,19 @@ def regress_climatology(clim_for_month: xa.DataArray) -> tuple[xa.DataArray, xa.
     intercept = y_mean - slope * x_mean
     return slope, intercept
 
+
 def predict_climatology(slope: xa.DataArray, intercept: xa.DataArray, x_target: float) -> xa.DataArray:
     """
     Predict climatology at a given x_target (year) given linear slope and intercept.
     y = slope * x_target + intercept
+    
+    Args:
+        slope (xa.DataArray): Slope of the linear regression
+        intercept (xa.DataArray): Intercept of the linear regression
+        x_target (float): Year to predict the climatology for
+
+    Returns:
+        xa.DataArray: Predicted climatology at the given x_target
     """
     return intercept + slope * x_target
         
