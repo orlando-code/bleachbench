@@ -32,3 +32,10 @@ sst_dir = data_dir / "sst"
 crw_sst_dir = sst_dir / "CRW_SST"
 bleaching_dir = data_dir / "bleaching"
 unep_gdcr_dir = data_dir / "UNEP_WCMC"
+
+###############################################################################
+# Case study areas
+###############################################################################
+
+GBR_LONS = (140, 150)
+GBR_LATS = (-20, -10)
