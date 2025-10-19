@@ -203,6 +203,7 @@ def process_bleaching_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     Returns:
         Processed dataframe
+    # TODO: this can probably be folded in with the process_bleaching_dataframe_pipeline function
     """
     processor = DataProcessor()
     df_processed = df.copy()
@@ -435,7 +436,7 @@ def filter_missing_sst_data(df: pd.DataFrame) -> pd.DataFrame:
     return no_nan_df
 
 
-def process_bleaching_dataframe(
+def process_bleaching_dataframe_pipeline(
     steps: list[str] = ["remove_uncertain_bleach_presence"],
     obs_threshold: int = 100,
     do_essential_steps: bool = True,
