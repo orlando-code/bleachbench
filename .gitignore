@@ -168,3 +168,6 @@ Thumbs.db
 
 # custom
 data/
+model_results/
+sst_cache/
+feature_cache/
