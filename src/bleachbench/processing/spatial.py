@@ -10,11 +10,18 @@ def calc_true_buffer(distance: float, minx: float, miny: float, maxy: float) -> 
     return dist_lat # latitude value is safer near equator
 
 
-def buffer_shapes(df: gpd.GeoDataFrame, buffer: float) -> gpd.GeoDataFrame:
+def buffer_shapes(df: gpd.GeoDataFrame, buffer: float, buffer_unit: str = "degrees") -> gpd.GeoDataFrame:
     """Buffer shapes in equal-area projection, then cast back to geographic CRS"""
-    return df.to_crs("EPSG:32662").buffer(buffer).to_crs("EPSG:4326")
+    # convert buffer to meters
+    if buffer_unit == "degrees":
+        buffer = calc_true_buffer(buffer, df.bounds.minx, df.bounds.miny, df.bounds.maxy)
+    elif buffer_unit == "meters":
+        buffer = buffer
+    else:
+        raise ValueError(f"Invalid buffer unit: {buffer_unit}")
+    return df.to_crs("EPSG:32662").buffer(buffer).to_crs(df.crs)
     
-    
+
 def points_in_polygons(points: gpd.GeoDataFrame, polygons: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Find points that are within polygons"""
     joined = gpd.sjoin(
@@ -24,4 +31,5 @@ def points_in_polygons(points: gpd.GeoDataFrame, polygons: gpd.GeoDataFrame) -> 
     )
     # drop duplicates
     joined.reset_index(drop=False, inplace=True)
-    return joined.drop_duplicates(subset="index")
+    no_dupes = joined.drop_duplicates(subset="index")
+    return no_dupes.set_index("index")
