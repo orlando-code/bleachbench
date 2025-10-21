@@ -477,6 +477,35 @@ class SSTTimeSeriesLoader(Dataset):
                 if len(unique_vals) != len(vals):
                     cleaned = cleaned.isel({dim: np.sort(unique_idx)})
         return cleaned
+    
+    def get_valid_indices(self, max_samples: int = None) -> List[int]:
+        """
+        Get list of valid indices without loading SST data.
+        Only checks dataframe validity, not SST data availability.
+        
+        Args:
+            max_samples: Maximum number of samples to return (for debugging)
+            
+        Returns:
+            List of valid dataframe indices
+        """
+        # Check for required columns and valid data
+        valid_mask = (
+            self.df["latitude"].notna() & 
+            self.df["longitude"].notna() & 
+            self.df["date"].notna() & 
+            self.df["bleach_presence"].notna()
+        )
+        
+        valid_indices = self.df[valid_mask].index.tolist()
+        
+        # Sample if max_samples is specified
+        if max_samples and len(valid_indices) > max_samples:
+            rng = np.random.default_rng(42)
+            sampled_indices = rng.choice(valid_indices, size=max_samples, replace=False)
+            return sampled_indices.tolist()
+        
+        return valid_indices
 
     # ---------- Visualization Helper ----------
     @staticmethod
